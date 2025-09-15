@@ -1,0 +1,14 @@
+{
+  "apps": {
+    "laplacian-vsharp-rts 1.0.0": {
+      "version": "20250915",
+      "exec": "",
+      "apptainer_args": []
+    }
+  },
+  "categories": [
+    "phase processing",
+    "image reconstruction",
+    "quantitative imaging"
+  ]
+}
