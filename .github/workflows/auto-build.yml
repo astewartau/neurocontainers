@@ -69,8 +69,8 @@ jobs:
         for APPLICATION in $(echo '${{ steps.find_changed_recipes.outputs.changed_recipes }}' | jq -r '.[]'); do
           echo "Checking $APPLICATION for evaluation tags..."
           if [ -f "recipes/$APPLICATION/build.yaml" ]; then
-            # Extract evaluation tag value
-            EVALUATION=$(grep -oP 'evaluation:\s*\K[^\s]+' "recipes/$APPLICATION/build.yaml" 2>/dev/null || echo "")
+            # Extract evaluation tag value (get unique values only)
+            EVALUATION=$(grep -oP 'evaluation:\s*\K[^\s]+' "recipes/$APPLICATION/build.yaml" 2>/dev/null | sort -u | head -1 || echo "")
             if [ -n "$EVALUATION" ]; then
               echo "✓ Found evaluation workflow '$EVALUATION' for recipe: $APPLICATION"
 
