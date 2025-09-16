@@ -15,7 +15,7 @@ def parse_bids_directory(bids_dir):
     # Process files and directories
     for root, dirs, files in os.walk(bids_dir):
         # Determine if we are in the derivatives directory
-        rel_root = os.path.join('bids', os.path.sep.join(root.split(os.path.sep)[1:]))
+        rel_root = root
         is_derivative = 'derivatives' in root
 
         # Extract the session from the folder path
