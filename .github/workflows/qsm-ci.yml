@@ -330,7 +330,7 @@ jobs:
 
           # Parse BIDS to extract files and metadata for subject
           echo "Parsing BIDS directory for subject 1..."
-          python3 descriptors/parse_bids.py test-data/phantom --subject 1 --output parsed_${algorithm}.json
+          python3 .github/workflows/parse_bids.py test-data/phantom --subject 1 --output parsed_${algorithm}.json
 
           if [ ! -f "parsed_${algorithm}.json" ]; then
             echo "❌ BIDS parsing failed - no parsed data found"
