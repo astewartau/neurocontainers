@@ -173,6 +173,22 @@ jobs:
           docker run --rm astewartau/${{ env.IMAGENAME }}:testing which qsm_nextqsm_algorithm.py || echo "❌ qsm_nextqsm_algorithm.py not found in PATH"
           echo "🔍 DEBUG: Container build verification complete"
 
+      - name: Save Docker image
+        run: |
+          echo "💾 Saving Docker image for cross-job access..."
+          TESTING_IMAGE="astewartau/${{ env.IMAGENAME }}:testing"
+          echo "Saving image: $TESTING_IMAGE"
+          docker save "$TESTING_IMAGE" | gzip > testing-image.tar.gz
+          echo "✓ Image saved as testing-image.tar.gz"
+          ls -lh testing-image.tar.gz
+
+      - name: Upload Docker image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: testing-docker-image
+          path: testing-image.tar.gz
+          retention-days: 1
+
       - name: Install test dependencies
         run: |
           pip install boutiques nibabel scipy scikit-learn scikit-image pandas numpy --user
@@ -297,6 +313,28 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: descriptors
+
+      - name: Download Docker image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: testing-docker-image
+
+      - name: Load Docker image
+        run: |
+          echo "📦 Loading Docker image for testing..."
+          if [ ! -f "testing-image.tar.gz" ]; then
+            echo "❌ FATAL: testing-image.tar.gz not found!"
+            echo "Available files:"
+            ls -la
+            exit 1
+          fi
+
+          echo "Loading image from testing-image.tar.gz..."
+          gunzip -c testing-image.tar.gz | docker load
+
+          echo "✅ Image loaded successfully"
+          echo "Available images:"
+          docker images --format "table {{.Repository}}:{{.Tag}}" | grep -E "(qsmxtci|astewartau)"
 
       - name: Install test dependencies
         run: |
