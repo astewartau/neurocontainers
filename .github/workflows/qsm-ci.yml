@@ -336,6 +336,46 @@ jobs:
           echo "Available images:"
           docker images --format "table {{.Repository}}:{{.Tag}}" | grep -E "(qsmxtci|astewartau)"
 
+      - name: Fix descriptors to use testing image
+        run: |
+          echo "🔧 Fixing descriptors to use testing image..."
+          TESTING_IMAGE="astewartau/${{ needs.build-image.outputs.imagename }}:testing"
+          echo "🔍 DEBUG: Target testing image: $TESTING_IMAGE"
+
+          echo "🔍 DEBUG: Available descriptor files:"
+          ls -la *.json
+
+          # Modify each descriptor to use the testing image
+          for desc in *.json; do
+            if [ -f "$desc" ]; then
+              echo "🔍 DEBUG: Processing descriptor: $desc"
+
+              # Show original image
+              ORIGINAL_IMAGE=$(jq -r '.["container-image"].image' "$desc")
+              echo "🔍 DEBUG: Original image in $desc: $ORIGINAL_IMAGE"
+
+              # Update the container image reference
+              jq --arg testing_image "$TESTING_IMAGE" '.["container-image"].image = $testing_image' "$desc" > "${desc}.tmp"
+              mv "${desc}.tmp" "$desc"
+
+              # Verify the change
+              NEW_IMAGE=$(jq -r '.["container-image"].image' "$desc")
+              echo "🔍 DEBUG: Updated image in $desc: $NEW_IMAGE"
+
+              if [ "$NEW_IMAGE" = "$TESTING_IMAGE" ]; then
+                echo "✅ Successfully updated $desc"
+              else
+                echo "❌ Failed to update $desc"
+                exit 1
+              fi
+            fi
+          done
+
+          echo "🔍 DEBUG: Final descriptor verification:"
+          for desc in *.json; do
+            echo "  $desc: $(jq -r '.["container-image"].image' "$desc")"
+          done
+
       - name: Install test dependencies
         run: |
           pip install boutiques nibabel scipy scikit-learn scikit-image pandas numpy matplotlib qsm-forward==0.19 --user
@@ -438,8 +478,8 @@ jobs:
           # Debug: Pre-execution verification
           echo "🔍 DEBUG: About to execute algorithm with these settings:"
           echo "🔍 DEBUG: Algorithm descriptor: ${algorithm}.json"
-          echo "🔍 DEBUG: Expected container image override: astewartau/${{ needs.build-image.outputs.imagename }}:testing"
-          echo "🔍 DEBUG: Descriptor original image: $(jq -r '.["container-image"].image' ${algorithm}.json)"
+          echo "🔍 DEBUG: Current descriptor image: $(jq -r '.["container-image"].image' ${algorithm}.json)"
+          echo "🔍 DEBUG: Current descriptor command: $(jq -r '.["command-line"]' ${algorithm}.json)"
           echo "🔍 DEBUG: Verifying target container exists:"
           TESTING_IMAGE="astewartau/${{ needs.build-image.outputs.imagename }}:testing"
           if ! docker images --format "table {{.Repository}}:{{.Tag}}" | grep -q "^${TESTING_IMAGE}$"; then
@@ -452,10 +492,13 @@ jobs:
           echo "✅ Testing image ${TESTING_IMAGE} exists"
 
           # Run bosh exec and capture output
+          echo "🔍 DEBUG: Final boutiques command about to execute:"
+          echo "  bosh exec launch ${algorithm}.json inputs_${algorithm}.json --no-pull --verbose"
+          echo "🔍 DEBUG: Descriptor image will be: $(jq -r '.["container-image"].image' ${algorithm}.json)"
+
           timeout 3600 bosh exec launch \
             "${algorithm}.json" \
             "inputs_${algorithm}.json" \
-            --imagepath "astewartau/${{ needs.build-image.outputs.imagename }}:testing" \
             --no-pull \
             --verbose 2>&1 | tee ${algorithm}_execution.log
 
@@ -472,7 +515,8 @@ jobs:
             echo "🔍 DEBUG: Available images:"
             docker images | grep -E "(qsmxtci|astewartau)" || echo "No matching images found"
             echo "🔍 DEBUG: Boutiques command that was attempted:"
-            echo "  bosh exec launch ${algorithm}.json inputs_${algorithm}.json --imagepath astewartau/${{ needs.build-image.outputs.imagename }}:testing --verbose"
+            echo "  bosh exec launch ${algorithm}.json inputs_${algorithm}.json --no-pull --verbose"
+            echo "🔍 DEBUG: Descriptor image was: $(jq -r '.["container-image"].image' ${algorithm}.json)"
 
             echo "Last 50 lines of execution log:"
             tail -50 ${algorithm}_execution.log
