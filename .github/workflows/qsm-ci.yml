@@ -1,5 +1,5 @@
 name: QSM-CI - Evaluation
-run-name: "qsm-ci: ${{ inputs.algorithms || 'qsm-tgv,qsm-nextqsm,qsm-rts,qsm-tv' }}"
+run-name: "qsm-ci: ${{ github.event_name == 'workflow_dispatch' && inputs.algorithms || 'auto-detected recipes' }}"
 
 permissions:
   contents: write
@@ -25,9 +25,54 @@ on:
         default: 'phantom,sim_sub1'
 
 jobs:
-  build-image:
+  detect-recipes:
     runs-on: ubuntu-22.04
     if: ${{ !contains(github.event.head_commit.message, 'skipci') }}
+    outputs:
+      recipes: ${{ steps.detect-recipes.outputs.recipes }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed recipes
+        id: detect-recipes
+        run: |
+          # Detect which recipes were changed
+          CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
+          echo "Changed files: $CHANGED_FILES"
+
+          # Find ALL recipe directories from changed build.yaml files
+          RECIPE_DIRS=()
+          for file in $CHANGED_FILES; do
+            if [[ "$file" == recipes/*/build.yaml ]]; then
+              RECIPE_DIRS+=($(dirname "$file"))
+            fi
+          done
+
+          if [ ${#RECIPE_DIRS[@]} -eq 0 ]; then
+            echo "No recipe build.yaml changes detected, using qsmxtci as default"
+            RECIPE_DIRS=("recipes/qsmxtci")
+          fi
+
+          # Convert to JSON array for matrix (extract just recipe names)
+          RECIPES=()
+          for dir in "${RECIPE_DIRS[@]}"; do
+            RECIPES+=($(basename "$dir"))
+          done
+
+          RECIPES_JSON=$(printf '%s\n' "${RECIPES[@]}" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "Detected recipes: $RECIPES_JSON"
+          echo "recipes=$RECIPES_JSON" >> $GITHUB_OUTPUT
+
+  build-images:
+    needs: detect-recipes
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        recipe: ${{ fromJson(needs.detect-recipes.outputs.recipes) }}
+      fail-fast: false
     outputs:
       container_tag: ${{ steps.vars.outputs.container_tag }}
       imagename: ${{ steps.vars.outputs.imagename }}
@@ -47,42 +92,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Detect changed recipe
-        id: detect-recipe
-        run: |
-          # Detect which recipe was changed
-          CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
-          echo "Changed files: $CHANGED_FILES"
-
-          # Find recipe directory from changed build.yaml files
-          RECIPE_DIR=""
-          for file in $CHANGED_FILES; do
-            if [[ "$file" == recipes/*/build.yaml ]]; then
-              RECIPE_DIR=$(dirname "$file")
-              break
-            fi
-          done
-
-          if [ -z "$RECIPE_DIR" ]; then
-            echo "No recipe build.yaml changes detected, using qsmxtci as default"
-            RECIPE_DIR="recipes/qsmxtci"
-          fi
-
-          RECIPE_NAME=$(basename "$RECIPE_DIR")
-          echo "Detected recipe: $RECIPE_NAME"
-          echo "recipe_name=$RECIPE_NAME" >> $GITHUB_OUTPUT
-          echo "recipe_dir=$RECIPE_DIR" >> $GITHUB_OUTPUT
-
       - name: Set environment variables
         id: vars
         run: |
-          RECIPE_NAME="${{ steps.detect-recipe.outputs.recipe_name }}"
+          RECIPE_NAME="${{ matrix.recipe }}"
+          RECIPE_DIR="recipes/$RECIPE_NAME"
           APPLICATION="$RECIPE_NAME"
           SHORT_SHA=$(git rev-parse --short $GITHUB_SHA)
           BUILDDATE=`date +%Y%m%d`
 
+          echo "Building recipe: $RECIPE_NAME from $RECIPE_DIR"
+
           # Get version from build.yaml
-          VERSION=$(yq eval '.version' ${{ steps.detect-recipe.outputs.recipe_dir }}/build.yaml)
+          VERSION=$(yq eval '.version' $RECIPE_DIR/build.yaml)
           IMAGENAME="${RECIPE_NAME}_${VERSION}"
           CONTAINER_TAG=astewartau/${IMAGENAME}:${BUILDDATE}
 
@@ -107,7 +129,7 @@ jobs:
 
       - name: Generate Dockerfile and Release file
         run: |
-          RECIPE_NAME="${{ steps.detect-recipe.outputs.recipe_name }}"
+          RECIPE_NAME="${{ matrix.recipe }}"
           echo "Generating Dockerfile for $RECIPE_NAME"
           ./builder/build.py generate "$RECIPE_NAME" --recreate --auto-build --generate-release
 
@@ -153,7 +175,7 @@ jobs:
 
       - name: Build Docker image (local only)
         run: |
-          RECIPE_NAME="${{ steps.detect-recipe.outputs.recipe_name }}"
+          RECIPE_NAME="${{ matrix.recipe }}"
           cd "./build/$RECIPE_NAME"
           echo "Building image locally (not pushing yet)..."
           docker build . \
@@ -185,7 +207,7 @@ jobs:
       - name: Upload Docker image artifact
         uses: actions/upload-artifact@v4
         with:
-          name: testing-docker-image
+          name: testing-docker-image-${{ matrix.recipe }}
           path: testing-image.tar.gz
           retention-days: 1
 
@@ -231,7 +253,7 @@ jobs:
       - name: Upload descriptors artifact
         uses: actions/upload-artifact@v4
         with:
-          name: descriptors
+          name: descriptors-${{ matrix.recipe }}
           path: descriptors/
 
       - name: Validate descriptors
@@ -257,7 +279,7 @@ jobs:
           echo "✓ All descriptors are valid"
 
   generate-qsm-matrix:
-    needs: build-image
+    needs: build-images
     runs-on: ubuntu-22.04
     outputs:
       qsm_algorithms: ${{ steps.extract-qsm.outputs.qsm_algorithms }}
@@ -265,7 +287,7 @@ jobs:
       - name: Download descriptors artifact
         uses: actions/download-artifact@v4
         with:
-          name: descriptors
+          name: descriptors-qsmxtci
 
       - name: Extract QSM algorithms using tags
         id: extract-qsm
@@ -299,7 +321,7 @@ jobs:
           fi
 
   test-qsm-algorithms:
-    needs: [build-image, generate-qsm-matrix]
+    needs: [build-images, generate-qsm-matrix]
     runs-on: ubuntu-22.04
     strategy:
       matrix:
@@ -312,12 +334,12 @@ jobs:
       - name: Download descriptors artifact
         uses: actions/download-artifact@v4
         with:
-          name: descriptors
+          name: descriptors-qsmxtci
 
       - name: Download Docker image artifact
         uses: actions/download-artifact@v4
         with:
-          name: testing-docker-image
+          name: testing-docker-image-qsmxtci
 
       - name: Load Docker image
         run: |
@@ -339,7 +361,10 @@ jobs:
       - name: Fix descriptors to use testing image
         run: |
           echo "🔧 Fixing descriptors to use testing image..."
-          TESTING_IMAGE="astewartau/${{ needs.build-image.outputs.imagename }}:testing"
+          # Since QSM algorithms are in qsmxtci, we need to use the qsmxtci container
+          # With matrix builds, we need to construct the image name for qsmxtci specifically
+          QSMXTCI_VERSION=$(yq eval '.version' recipes/qsmxtci/build.yaml)
+          TESTING_IMAGE="astewartau/qsmxtci_${QSMXTCI_VERSION}:testing"
           echo "🔍 DEBUG: Target testing image: $TESTING_IMAGE"
 
           echo "🔍 DEBUG: Available descriptor files:"
@@ -481,7 +506,9 @@ jobs:
           echo "🔍 DEBUG: Current descriptor image: $(jq -r '.["container-image"].image' ${algorithm}.json)"
           echo "🔍 DEBUG: Current descriptor command: $(jq -r '.["command-line"]' ${algorithm}.json)"
           echo "🔍 DEBUG: Verifying target container exists:"
-          TESTING_IMAGE="astewartau/${{ needs.build-image.outputs.imagename }}:testing"
+          # Since QSM algorithms are in qsmxtci, we need to use the qsmxtci container
+          QSMXTCI_VERSION=$(yq eval '.version' recipes/qsmxtci/build.yaml)
+          TESTING_IMAGE="astewartau/qsmxtci_${QSMXTCI_VERSION}:testing"
           if ! docker images --format "table {{.Repository}}:{{.Tag}}" | grep -q "^${TESTING_IMAGE}$"; then
             echo "❌ FATAL: Testing image ${TESTING_IMAGE} does not exist!"
             echo "Available images:"
@@ -511,7 +538,8 @@ jobs:
             # Debug: Failure analysis
             echo "🔍 DEBUG: Failure analysis:"
             echo "🔍 DEBUG: Algorithm: $algorithm"
-            echo "🔍 DEBUG: Expected image: astewartau/${{ needs.build-image.outputs.imagename }}:testing"
+            QSMXTCI_VERSION=$(yq eval '.version' recipes/qsmxtci/build.yaml)
+            echo "🔍 DEBUG: Expected image: astewartau/qsmxtci_${QSMXTCI_VERSION}:testing"
             echo "🔍 DEBUG: Available images:"
             docker images | grep -E "(qsmxtci|astewartau)" || echo "No matching images found"
             echo "🔍 DEBUG: Boutiques command that was attempted:"
@@ -639,15 +667,31 @@ jobs:
           if-no-files-found: ignore
 
   aggregate-results:
-    needs: [build-image, test-qsm-algorithms]
+    needs: [build-images, test-qsm-algorithms]
     if: always()  # Run even if some tests failed
     runs-on: ubuntu-22.04
     outputs:
       should_upload: ${{ steps.decide.outputs.should_upload }}
-      container_tag: ${{ needs.build-image.outputs.container_tag }}
-      imagename: ${{ needs.build-image.outputs.imagename }}
-      builddate: ${{ needs.build-image.outputs.builddate }}
+      container_tag: ${{ steps.compute-outputs.outputs.container_tag }}
+      imagename: ${{ steps.compute-outputs.outputs.imagename }}
+      builddate: ${{ steps.compute-outputs.outputs.builddate }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compute outputs for compatibility
+        id: compute-outputs
+        run: |
+          # Since QSM algorithms are only in qsmxtci, compute qsmxtci-specific outputs
+          QSMXTCI_VERSION=$(yq eval '.version' recipes/qsmxtci/build.yaml)
+          BUILDDATE=`date +%Y%m%d`
+          IMAGENAME="qsmxtci_${QSMXTCI_VERSION}"
+          CONTAINER_TAG="astewartau/${IMAGENAME}:${BUILDDATE}"
+
+          echo "imagename=$IMAGENAME" >> $GITHUB_OUTPUT
+          echo "container_tag=$CONTAINER_TAG" >> $GITHUB_OUTPUT
+          echo "builddate=$BUILDDATE" >> $GITHUB_OUTPUT
+
       - name: Collect QSM test results
         id: collect
         run: |
