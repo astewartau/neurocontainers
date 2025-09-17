@@ -6,6 +6,38 @@ import subprocess
 import sys
 import tempfile
 import shutil
+import gzip
+
+def copy_and_compress_if_needed(src_file, dest_file):
+    """Copy file and compress to .nii.gz format if needed"""
+    print(f"[INFO] Processing: {src_file} -> {dest_file}")
+
+    # Check if source is already gzipped
+    is_src_gzipped = src_file.endswith('.nii.gz')
+
+    # Check if destination should be gzipped
+    should_dest_be_gzipped = dest_file.endswith('.nii.gz')
+
+    if is_src_gzipped and should_dest_be_gzipped:
+        # Both gzipped, simple copy
+        print(f"[INFO] Copying gzipped file directly")
+        shutil.copy2(src_file, dest_file)
+    elif not is_src_gzipped and should_dest_be_gzipped:
+        # Source is .nii, destination should be .nii.gz - compress
+        print(f"[INFO] Compressing .nii to .nii.gz")
+        with open(src_file, 'rb') as f_in:
+            with gzip.open(dest_file, 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
+    elif is_src_gzipped and not should_dest_be_gzipped:
+        # Source is .nii.gz, destination should be .nii - decompress
+        print(f"[INFO] Decompressing .nii.gz to .nii")
+        with gzip.open(src_file, 'rb') as f_in:
+            with open(dest_file, 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
+    else:
+        # Both .nii, simple copy
+        print(f"[INFO] Copying .nii file directly")
+        shutil.copy2(src_file, dest_file)
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='QSM reconstruction using Total Variation')
@@ -71,8 +103,8 @@ def main():
             phase_dest = os.path.join(anat_dir, f'sub-01_part-phase_echo-{echo_num}_MEGRE.nii.gz')
 
             print(f"[INFO] Copying echo {echo_num} files...")
-            shutil.copy2(mag_file, mag_dest)
-            shutil.copy2(phase_file, phase_dest)
+            copy_and_compress_if_needed(mag_file, mag_dest)
+            copy_and_compress_if_needed(phase_file, phase_dest)
 
         # Create temporary output directory
         output_temp = os.path.join(temp_dir, 'output_temp')
