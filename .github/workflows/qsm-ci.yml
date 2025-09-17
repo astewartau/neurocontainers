@@ -122,24 +122,36 @@ jobs:
         run: |
           FORCE_REBUILD="${{ inputs.force_rebuild || 'false' }}"
 
+          # Debug: Show what we're checking
+          echo "🔍 DEBUG: Checking if rebuild needed..."
+          echo "🔍 DEBUG: FORCE_REBUILD: $FORCE_REBUILD"
+          echo "🔍 DEBUG: CONTAINER_TAG: ${{ env.CONTAINER_TAG }}"
+
           if [ "$FORCE_REBUILD" = "true" ]; then
             echo "Force rebuild requested"
             echo "needs_rebuild=true" >> $GITHUB_OUTPUT
+            echo "🔍 DEBUG: Force rebuild - setting needs_rebuild=true"
           else
             # Check if image already exists with same content
+            echo "🔍 DEBUG: Trying to pull existing image..."
             docker pull ${{ env.CONTAINER_TAG }} && {
               echo "Image already exists, checking for changes..."
               # For simplicity, we'll rebuild if the recipe changed
               # In production, you might want more sophisticated change detection
               echo "needs_rebuild=true" >> $GITHUB_OUTPUT
+              echo "🔍 DEBUG: Image exists - setting needs_rebuild=true (will rebuild anyway)"
             } || {
               echo "Image doesn't exist, needs rebuild"
               echo "needs_rebuild=true" >> $GITHUB_OUTPUT
+              echo "🔍 DEBUG: Image doesn't exist - setting needs_rebuild=true"
             }
           fi
 
+          # Debug: Show final decision
+          FINAL_DECISION=$(grep needs_rebuild $GITHUB_OUTPUT || echo "needs_rebuild=UNKNOWN")
+          echo "🔍 DEBUG: Final rebuild decision: $FINAL_DECISION"
+
       - name: Build Docker image (local only)
-        if: steps.check-rebuild.outputs.needs_rebuild == 'true'
         run: |
           RECIPE_NAME="${{ steps.detect-recipe.outputs.recipe_name }}"
           cd "./build/$RECIPE_NAME"
@@ -391,16 +403,22 @@ jobs:
           echo "🔍 DEBUG: Expected container image override: astewartau/${{ needs.build-image.outputs.imagename }}:testing"
           echo "🔍 DEBUG: Descriptor original image: $(jq -r '.["container-image"].image' ${algorithm}.json)"
           echo "🔍 DEBUG: Verifying target container exists:"
-          docker images | grep "${{ needs.build-image.outputs.imagename }}:testing" || echo "❌ Target testing container not found!"
-          echo "🔍 DEBUG: Testing if image override works..."
-          echo "🔍 DEBUG: Running simple test with image override:"
-          timeout 30 bosh exec launch "${algorithm}.json" --help --imagepath "astewartau/${{ needs.build-image.outputs.imagename }}:testing" || echo "❌ Image override test failed"
+          TESTING_IMAGE="astewartau/${{ needs.build-image.outputs.imagename }}:testing"
+          if ! docker images --format "table {{.Repository}}:{{.Tag}}" | grep -q "^${TESTING_IMAGE}$"; then
+            echo "❌ FATAL: Testing image ${TESTING_IMAGE} does not exist!"
+            echo "Available images:"
+            docker images --format "table {{.Repository}}:{{.Tag}}" | grep -E "(qsmxtci|astewartau)"
+            echo "Build process must have failed. Stopping execution."
+            exit 1
+          fi
+          echo "✅ Testing image ${TESTING_IMAGE} exists"
 
           # Run bosh exec and capture output
           timeout 3600 bosh exec launch \
             "${algorithm}.json" \
             "inputs_${algorithm}.json" \
             --imagepath "astewartau/${{ needs.build-image.outputs.imagename }}:testing" \
+            --no-pull \
             --verbose 2>&1 | tee ${algorithm}_execution.log
 
           BOSH_EXIT_CODE=${PIPESTATUS[0]}
