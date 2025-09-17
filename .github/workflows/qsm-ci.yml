@@ -154,6 +154,13 @@ jobs:
           echo "✓ Docker image built successfully"
           docker images | grep "$RECIPE_NAME"
 
+          # Debug: Verify built container contents
+          echo "🔍 DEBUG: Verifying built container contents..."
+          echo "🔍 DEBUG: Container tag being built: astewartau/${{ env.IMAGENAME }}:testing"
+          docker run --rm astewartau/${{ env.IMAGENAME }}:testing ls -la /opt/qsm-ci/ || echo "❌ Failed to list /opt/qsm-ci/"
+          docker run --rm astewartau/${{ env.IMAGENAME }}:testing which qsm_nextqsm_algorithm.py || echo "❌ qsm_nextqsm_algorithm.py not found in PATH"
+          echo "🔍 DEBUG: Container build verification complete"
+
       - name: Install test dependencies
         run: |
           pip install boutiques nibabel scipy scikit-learn scikit-image pandas numpy --user
@@ -184,6 +191,14 @@ jobs:
 
           echo "✓ Extracted descriptors:"
           ls -la descriptors/*.json
+
+          # Debug: Check extracted descriptors
+          echo "🔍 DEBUG: Checking extracted descriptors..."
+          for desc in descriptors/*.json; do
+            echo "🔍 DEBUG: Descriptor $(basename $desc):"
+            echo "  Container image: $(jq -r '.["container-image"].image' $desc)"
+            echo "  Command line: $(jq -r '.["command-line"]' $desc)"
+          done
 
       - name: Upload descriptors artifact
         uses: actions/upload-artifact@v4
@@ -370,6 +385,17 @@ jobs:
           echo "Input parameters:"
           cat "inputs_${algorithm}.json"
 
+          # Debug: Pre-execution verification
+          echo "🔍 DEBUG: About to execute algorithm with these settings:"
+          echo "🔍 DEBUG: Algorithm descriptor: ${algorithm}.json"
+          echo "🔍 DEBUG: Expected container image override: astewartau/${{ needs.build-image.outputs.imagename }}:testing"
+          echo "🔍 DEBUG: Descriptor original image: $(jq -r '.["container-image"].image' ${algorithm}.json)"
+          echo "🔍 DEBUG: Verifying target container exists:"
+          docker images | grep "${{ needs.build-image.outputs.imagename }}:testing" || echo "❌ Target testing container not found!"
+          echo "🔍 DEBUG: Testing if image override works..."
+          echo "🔍 DEBUG: Running simple test with image override:"
+          timeout 30 bosh exec launch "${algorithm}.json" --help --imagepath "astewartau/${{ needs.build-image.outputs.imagename }}:testing" || echo "❌ Image override test failed"
+
           # Run bosh exec and capture output
           timeout 3600 bosh exec launch \
             "${algorithm}.json" \
@@ -382,6 +408,16 @@ jobs:
           # Check bosh exit code
           if [ $BOSH_EXIT_CODE -ne 0 ]; then
             echo "❌ $algorithm execution failed: bosh exec returned non-zero exit code: $BOSH_EXIT_CODE"
+
+            # Debug: Failure analysis
+            echo "🔍 DEBUG: Failure analysis:"
+            echo "🔍 DEBUG: Algorithm: $algorithm"
+            echo "🔍 DEBUG: Expected image: astewartau/${{ needs.build-image.outputs.imagename }}:testing"
+            echo "🔍 DEBUG: Available images:"
+            docker images | grep -E "(qsmxtci|astewartau)" || echo "No matching images found"
+            echo "🔍 DEBUG: Boutiques command that was attempted:"
+            echo "  bosh exec launch ${algorithm}.json inputs_${algorithm}.json --imagepath astewartau/${{ needs.build-image.outputs.imagename }}:testing --verbose"
+
             echo "Last 50 lines of execution log:"
             tail -50 ${algorithm}_execution.log
             echo "test_result=FAIL" >> $GITHUB_OUTPUT
