@@ -173,7 +173,7 @@ def main():
 
         # Ensure output directory exists
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
-        shutil.copy2(result_file, output_file)
+        copy_and_compress_if_needed(result_file, output_file)
 
     print("[INFO] QSM-RTS algorithm completed successfully!")
 
