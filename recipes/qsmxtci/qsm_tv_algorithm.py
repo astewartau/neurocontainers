@@ -7,6 +7,7 @@ import sys
 import tempfile
 import shutil
 import gzip
+import json
 
 def copy_and_compress_if_needed(src_file, dest_file):
     """Copy file and compress to .nii.gz format if needed"""
@@ -105,6 +106,23 @@ def main():
             print(f"[INFO] Copying echo {echo_num} files...")
             copy_and_compress_if_needed(mag_file, mag_dest)
             copy_and_compress_if_needed(phase_file, phase_dest)
+
+            # Create JSON sidecar files
+            mag_json = os.path.join(anat_dir, f'sub-01_part-mag_echo-{echo_num}_MEGRE.json')
+            phase_json = os.path.join(anat_dir, f'sub-01_part-phase_echo-{echo_num}_MEGRE.json')
+
+            metadata = {
+                "EchoTime": echo_times[i],
+                "MagneticFieldStrength": field_strength
+            }
+
+            with open(mag_json, 'w') as f:
+                json.dump(metadata, f, indent=2)
+
+            with open(phase_json, 'w') as f:
+                json.dump(metadata, f, indent=2)
+
+            print(f"[INFO] Created JSON sidecars for echo {echo_num}")
 
         # Create temporary output directory
         output_temp = os.path.join(temp_dir, 'output_temp')
